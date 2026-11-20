@@ -6,94 +6,108 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RADAR Weekly Scanner</title>
 <style>
-body{margin:0;background:#101827;color:#eef3ff;font-family:Arial,sans-serif;padding:16px}
-h2{color:#55d6be}
-button,select{padding:11px;border:0;border-radius:8px;margin:4px;background:#26364d;color:white}
-#status{color:#ffd166;margin:12px 0}
-.card{background:#1c2a3d;padding:12px;border-radius:10px;margin:10px 0}
-table{width:100%;border-collapse:collapse;font-size:12px}
-td,th{padding:10px 5px;border-bottom:1px solid #34445a;text-align:center}
-th{color:#55d6be}
-.up{color:#ff7777}.down{color:#55d6be}
+body{margin:0;background:#101827;color:#fff;font-family:Arial,sans-serif;padding:18px}
+h1{color:#38bdf8;margin-bottom:5px}
+.sub{color:#aab6c8;font-size:13px}
+.panel{background:#1e293b;padding:15px;border-radius:12px;margin:15px 0}
+input{width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:0;margin-top:10px;font-size:15px}
+button{background:#0284c7;color:white;border:0;padding:12px 18px;border-radius:8px;margin-top:10px;font-size:15px}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+th,td{padding:12px 7px;text-align:center;border-bottom:1px solid #334155;white-space:nowrap}
+th{color:#38bdf8}
+.green{color:#4ade80}
+.red{color:#fb7185}
+.small{color:#94a3b8;font-size:12px}
+.wrap{overflow-x:auto}
 </style>
 </head>
 <body>
-<h2>RADAR | Weekly Scanner</h2>
-<div class="card">
-<div id="status">در حال اتصال به Toobit...</div>
-<label>حداکثر فاصله از سطح:</label>
-<select id="distance">
-<option value="0.5">۰٫۵ درصد</option>
-<option value="1" selected>۱ درصد</option>
-<option value="2">۲ درصد</option>
-<option value="3">۳ درصد</option>
-<option value="5">۵ درصد</option>
-</select>
-<button onclick="scan()">اسکن مجدد</button>
+
+<h1>RADAR WEEKLY</h1>
+<div class="sub">اسکنر حمایت و مقاومت هفتگی قراردادهای توبیت</div>
+
+<div class="panel">
+  <label>حداکثر فاصله از حمایت یا مقاومت (درصد)</label>
+  <input id="distance" type="number" value="1" min="0.1" step="0.1">
+  <button onclick="loadData()">بروزرسانی اطلاعات</button>
+  <p id="status" class="small">در حال دریافت اطلاعات...</p>
+  <p id="updated" class="small"></p>
 </div>
-<div class="card">
+
+<div class="panel wrap">
 <table>
-<thead><tr><th>ارز</th><th>قیمت</th><th>حمایت</th><th>مقاومت</th><th>فاصله نزدیک‌ترین سطح</th></tr></thead>
-<tbody id="rows"></tbody>
+<thead>
+<tr>
+<th>ارز</th>
+<th>قیمت</th>
+<th>حمایت هفتگی</th>
+<th>فاصله حمایت</th>
+<th>مقاومت هفتگی</th>
+<th>فاصله مقاومت</th>
+</tr>
+</thead>
+<tbody id="results">
+<tr><td colspan="6">در حال بارگذاری...</td></tr>
+</tbody>
 </table>
 </div>
+
 <script>
-const base="https://api.toobit.com";
-const statusBox=document.getElementById("status");
-async function get(url){
- const r=await fetch(base+url);
- if(!r.ok) throw new Error("HTTP "+r.status);
- return r.json();
-}
-async function scan(){
- statusBox.textContent="در حال دریافت اطلاعات بازار...";
- document.getElementById("rows").innerHTML="";
- try{
-  const info=await get("/api/v1/exchangeInfo");
-  const contracts=(info.contracts||[]).filter(x=>
-   x.status==="TRADING" && x.symbol && x.symbol.endsWith("-SWAP-USDT")
-  );
-  const prices=await get("/quote/v1/markPrice");
-  const priceMap=new Map(prices.map(x=>[x.symbolId,Number(x.price)]));
-  statusBox.textContent="تعداد قراردادها: "+contracts.length+" | در حال بررسی کندل‌های هفتگی...";
-  const results=[];
-  let done=0;
-  for(let i=0;i<contracts.length;i+=5){
-   const batch=contracts.slice(i,i+5);
-   const found=await Promise.all(batch.map(async c=>{
-    try{
-     const p=priceMap.get(c.symbol);
-     if(!p)return null;
-     const k=await get("/quote/v1/klines?symbol="+encodeURIComponent(c.symbol)+"&interval=1w&limit=3");
-     if(!Array.isArray(k)||k.length<2)return null;
-     const w=k[k.length-2];
-     const high=Number(w[2]),low=Number(w[3]),close=Number(w[4]);
-     const pivot=(high+low+close)/3;
-     const s1=2*pivot-high,r1=2*pivot-low;
-     const supports=[low,s1].filter(x=>x>0&&x<p).sort((a,b)=>b-a);
-     const resistances=[high,r1].filter(x=>x>p).sort((a,b)=>a-b);
-     const support=supports[0]||low;
-     const resistance=resistances[0]||high;
-     const ds=Math.abs((p-support)/p*100);
-     const dr=Math.abs((resistance-p)/p*100);
-     return {symbol:c.symbol.replace("-SWAP-USDT",""),p,support,resistance,dist:Math.min(ds,dr),near:ds<dr?"حمایت":"مقاومت"};
-    }catch(e){return null}
-   }));
-   results.push(...found.filter(Boolean));
-   done+=batch.length;
-   statusBox.textContent="بررسی "+done+" از "+contracts.length+" قرارداد...";
+async function loadData(){
+  const status=document.getElementById("status");
+  const results=document.getElementById("results");
+  const limit=Number(document.getElementById("distance").value)||1;
+
+  status.textContent="در حال دریافت اطلاعات...";
+  results.innerHTML='<tr><td colspan="6">لطفاً صبر کنید...</td></tr>';
+
+  try{
+    const response=await fetch("./data.json?t="+Date.now(),{cache:"no-store"});
+    if(!response.ok) throw new Error("خطا در دریافت فایل اطلاعات");
+
+    const data=await response.json();
+    if(!Array.isArray(data.items)) throw new Error("ساختار اطلاعات معتبر نیست");
+
+    const coins=data.items.filter(x=>
+      Number(x.support_distance)<=limit ||
+      Number(x.resistance_distance)<=limit
+    );
+
+    coins.sort((a,b)=>Number(a.distance)-Number(b.distance));
+
+    results.innerHTML="";
+
+    if(coins.length===0){
+      results.innerHTML='<tr><td colspan="6">ارزی نزدیک به محدوده انتخابی پیدا نشد.</td></tr>';
+    }
+
+    for(const x of coins){
+      const nearSupport=Number(x.support_distance)<=limit;
+      const nearResistance=Number(x.resistance_distance)<=limit;
+
+      const row=document.createElement("tr");
+      row.innerHTML=`
+        <td>${x.symbol.replace("-SWAP-USDT","")}</td>
+        <td>${Number(x.price).toPrecision(6)}</td>
+        <td>${Number(x.support).toPrecision(6)}</td>
+        <td class="${nearSupport?'green':''}">${x.support_distance}%</td>
+        <td>${Number(x.resistance).toPrecision(6)}</td>
+        <td class="${nearResistance?'red':''}">${x.resistance_distance}%</td>
+      `;
+      results.appendChild(row);
+    }
+
+    status.textContent="تعداد ارزهای نزدیک به محدوده: "+coins.length;
+    document.getElementById("updated").textContent=
+      "آخرین دریافت اطلاعات: "+new Date(data.updated_at).toLocaleString("fa-IR");
+
+  }catch(error){
+    status.textContent="خطا: "+error.message;
+    results.innerHTML='<tr><td colspan="6">اطلاعات دریافت نشد.</td></tr>';
   }
-  const limit=Number(document.getElementById("distance").value);
-  const filtered=results.filter(x=>x.dist<=limit).sort((a,b)=>a.dist-b.dist);
-  document.getElementById("rows").innerHTML=filtered.map(x=>
-   `<tr><td>${x.symbol}</td><td>${x.p}</td><td class="down">${x.support}</td><td class="up">${x.resistance}</td><td>${x.dist.toFixed(2)}% (${x.near})</td></tr>`
-  ).join("");
-  statusBox.textContent="پایان اسکن | "+filtered.length+" ارز نزدیک سطوح هفتگی از "+results.length+" ارز بررسی‌شده";
- }catch(e){
-  statusBox.textContent="خطا در دریافت اطلاعات: "+e.message+" | ممکن است اتصال یا دسترسی مرورگر محدود باشد.";
- }
 }
-scan();
+
+loadData();
 </script>
 </body>
 </html>
