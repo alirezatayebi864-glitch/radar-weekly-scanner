@@ -1,0 +1,129 @@
+
+name: Update RADAR data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Toobit data
+        run: |
+          python - <<'PY'
+          import json, time, urllib.request, urllib.parse
+          from datetime import datetime, timezone
+
+          BASE = "https://api.toobit.com"
+
+          def get(path, params=None):
+              url = BASE + path
+              if params:
+                  url += "?" + urllib.parse.urlencode(params)
+              req = urllib.request.Request(
+                  url, headers={"User-Agent": "RADAR-Scanner/1.0"}
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read().decode("utf-8"))
+
+          info = get("/api/v1/exchangeInfo")
+          marks = get("/quote/v1/markPrice")
+
+          prices = {
+              x.get("symbolId"): float(x.get("price", 0))
+              for x in marks if x.get("symbolId")
+          }
+
+          items = []
+
+          for c in info.get("contracts", []):
+              sym = c.get("symbol", "")
+
+              if (
+                  c.get("status") != "TRADING"
+                  or c.get("quoteAsset") != "USDT"
+                  or c.get("inverse") is not False
+                  or not sym.endswith("-SWAP-USDT")
+              ):
+                  continue
+
+              price = prices.get(sym)
+              if not price:
+                  continue
+
+              try:
+                  candles = get("/quote/v1/klines", {
+                      "symbol": sym,
+                      "interval": "1w",
+                      "limit": 3
+                  })
+
+                  if not isinstance(candles, list) or len(candles) < 2:
+                      continue
+
+                  candle = candles[-2]
+                  high = float(candle[2])
+                  low = float(candle[3])
+                  close = float(candle[4])
+
+                  pivot = (high + low + close) / 3
+                  s1 = 2 * pivot - high
+                  r1 = 2 * pivot - low
+
+                  supports = [x for x in (low, s1) if 0 < x < price]
+                  resistances = [x for x in (high, r1) if x > price]
+
+                  support = max(supports) if supports else low
+                  resistance = min(resistances) if resistances else high
+
+                  ds = abs((price - support) / price * 100)
+                  dr = abs((resistance - price) / price * 100)
+
+                  items.append({
+                      "symbol": sym,
+                      "price": price,
+                      "support": support,
+                      "resistance": resistance,
+                      "support_distance": round(ds, 3),
+                      "resistance_distance": round(dr, 3),
+                      "distance": round(min(ds, dr), 3)
+                  })
+
+              except Exception:
+                  pass
+
+              time.sleep(0.15)
+
+          data = {
+              "updated_at": datetime.now(timezone.utc).isoformat(),
+              "count": len(items),
+              "items": items
+          }
+
+          with open("data.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False)
+
+          if not items:
+              raise SystemExit("No market data received")
+
+          print("Updated coins:", len(items))
+          PY
+
+      - name: Save data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Update RADAR data"
+            git push
+          fi
