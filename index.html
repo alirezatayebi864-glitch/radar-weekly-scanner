@@ -1,0 +1,99 @@
+
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RADAR Weekly Scanner</title>
+<style>
+body{margin:0;background:#101827;color:#eef3ff;font-family:Arial,sans-serif;padding:16px}
+h2{color:#55d6be}
+button,select{padding:11px;border:0;border-radius:8px;margin:4px;background:#26364d;color:white}
+#status{color:#ffd166;margin:12px 0}
+.card{background:#1c2a3d;padding:12px;border-radius:10px;margin:10px 0}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td,th{padding:10px 5px;border-bottom:1px solid #34445a;text-align:center}
+th{color:#55d6be}
+.up{color:#ff7777}.down{color:#55d6be}
+</style>
+</head>
+<body>
+<h2>RADAR | Weekly Scanner</h2>
+<div class="card">
+<div id="status">در حال اتصال به Toobit...</div>
+<label>حداکثر فاصله از سطح:</label>
+<select id="distance">
+<option value="0.5">۰٫۵ درصد</option>
+<option value="1" selected>۱ درصد</option>
+<option value="2">۲ درصد</option>
+<option value="3">۳ درصد</option>
+<option value="5">۵ درصد</option>
+</select>
+<button onclick="scan()">اسکن مجدد</button>
+</div>
+<div class="card">
+<table>
+<thead><tr><th>ارز</th><th>قیمت</th><th>حمایت</th><th>مقاومت</th><th>فاصله نزدیک‌ترین سطح</th></tr></thead>
+<tbody id="rows"></tbody>
+</table>
+</div>
+<script>
+const base="https://api.toobit.com";
+const statusBox=document.getElementById("status");
+async function get(url){
+ const r=await fetch(base+url);
+ if(!r.ok) throw new Error("HTTP "+r.status);
+ return r.json();
+}
+async function scan(){
+ statusBox.textContent="در حال دریافت اطلاعات بازار...";
+ document.getElementById("rows").innerHTML="";
+ try{
+  const info=await get("/api/v1/exchangeInfo");
+  const contracts=(info.contracts||[]).filter(x=>
+   x.status==="TRADING" && x.symbol && x.symbol.endsWith("-SWAP-USDT")
+  );
+  const prices=await get("/quote/v1/markPrice");
+  const priceMap=new Map(prices.map(x=>[x.symbolId,Number(x.price)]));
+  statusBox.textContent="تعداد قراردادها: "+contracts.length+" | در حال بررسی کندل‌های هفتگی...";
+  const results=[];
+  let done=0;
+  for(let i=0;i<contracts.length;i+=5){
+   const batch=contracts.slice(i,i+5);
+   const found=await Promise.all(batch.map(async c=>{
+    try{
+     const p=priceMap.get(c.symbol);
+     if(!p)return null;
+     const k=await get("/quote/v1/klines?symbol="+encodeURIComponent(c.symbol)+"&interval=1w&limit=3");
+     if(!Array.isArray(k)||k.length<2)return null;
+     const w=k[k.length-2];
+     const high=Number(w[2]),low=Number(w[3]),close=Number(w[4]);
+     const pivot=(high+low+close)/3;
+     const s1=2*pivot-high,r1=2*pivot-low;
+     const supports=[low,s1].filter(x=>x>0&&x<p).sort((a,b)=>b-a);
+     const resistances=[high,r1].filter(x=>x>p).sort((a,b)=>a-b);
+     const support=supports[0]||low;
+     const resistance=resistances[0]||high;
+     const ds=Math.abs((p-support)/p*100);
+     const dr=Math.abs((resistance-p)/p*100);
+     return {symbol:c.symbol.replace("-SWAP-USDT",""),p,support,resistance,dist:Math.min(ds,dr),near:ds<dr?"حمایت":"مقاومت"};
+    }catch(e){return null}
+   }));
+   results.push(...found.filter(Boolean));
+   done+=batch.length;
+   statusBox.textContent="بررسی "+done+" از "+contracts.length+" قرارداد...";
+  }
+  const limit=Number(document.getElementById("distance").value);
+  const filtered=results.filter(x=>x.dist<=limit).sort((a,b)=>a.dist-b.dist);
+  document.getElementById("rows").innerHTML=filtered.map(x=>
+   `<tr><td>${x.symbol}</td><td>${x.p}</td><td class="down">${x.support}</td><td class="up">${x.resistance}</td><td>${x.dist.toFixed(2)}% (${x.near})</td></tr>`
+  ).join("");
+  statusBox.textContent="پایان اسکن | "+filtered.length+" ارز نزدیک سطوح هفتگی از "+results.length+" ارز بررسی‌شده";
+ }catch(e){
+  statusBox.textContent="خطا در دریافت اطلاعات: "+e.message+" | ممکن است اتصال یا دسترسی مرورگر محدود باشد.";
+ }
+}
+scan();
+</script>
+</body>
+</html>
